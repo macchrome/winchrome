@@ -1,7 +1,7 @@
 # Disables file download quarantining
 
---- a/internal/common/base_file.cc
-+++ b/internal/common/base_file.cc
+--- a/components/download/internal/common/base_file.cc
++++ b/components/download/internal/common/base_file.cc
 @@ -23,7 +23,6 @@
  #include "components/download/public/common/download_interrupt_reasons_utils.h"
  #include "components/download/public/common/download_item.h"
