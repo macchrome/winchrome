@@ -1,0 +1,54 @@
+--- a/chrome/browser/search/search.cc
++++ b/chrome/browser/search/search.cc
+@@ -185,26 +185,7 @@ struct NewTabURLDetails {
+                              : chrome::kChromeSearchLocalNtpUrl);
+ #endif
+ 
+-    if (ShouldShowLocalNewTab(profile))
+-      return NewTabURLDetails(local_url, NEW_TAB_URL_VALID);
+-
+-    const TemplateURL* template_url =
+-        GetDefaultSearchProviderTemplateURL(profile);
+-    if (!profile || !template_url)
+-      return NewTabURLDetails(local_url, NEW_TAB_URL_BAD);
+-
+-    GURL search_provider_url(template_url->new_tab_url_ref().ReplaceSearchTerms(
+-        TemplateURLRef::SearchTermsArgs(base::string16()),
+-        UIThreadSearchTermsData()));
+-
+-    if (!search_provider_url.is_valid())
+-      return NewTabURLDetails(local_url, NEW_TAB_URL_NOT_SET);
+-    if (!search_provider_url.SchemeIsCryptographic())
+-      return NewTabURLDetails(local_url, NEW_TAB_URL_INSECURE);
+-    if (!IsURLAllowedForSupervisedUser(search_provider_url, profile))
+-      return NewTabURLDetails(local_url, NEW_TAB_URL_BLOCKED);
+-
+-    return NewTabURLDetails(search_provider_url, NEW_TAB_URL_VALID);
++    return NewTabURLDetails(local_url, NEW_TAB_URL_VALID);
+   }
+ 
+   const GURL url;
+--- a/components/ntp_snippets/features.cc
++++ b/components/ntp_snippets/features.cc
+@@ -39,7 +39,7 @@ const base::Feature* const kAllFeatures[
+     &kOptionalImagesEnabledFeature};
+ 
+ const base::Feature kArticleSuggestionsFeature{
+-    "NTPArticleSuggestions", base::FEATURE_ENABLED_BY_DEFAULT};
++    "NTPArticleSuggestions", base::FEATURE_DISABLED_BY_DEFAULT};
+ 
+ const base::Feature kRemoteSuggestionsEmulateM58FetchingSchedule{
+     "RemoteSuggestionsEmulateM58FetchingSchedule",
+@@ -69,10 +69,10 @@ const char kNotificationsDailyLimit[] =
+ const char kNotificationsIgnoredLimitParam[] = "ignored_limit";
+ 
+ const base::Feature kKeepPrefetchedContentSuggestions{
+-    "KeepPrefetchedContentSuggestions", base::FEATURE_ENABLED_BY_DEFAULT};
++    "KeepPrefetchedContentSuggestions", base::FEATURE_DISABLED_BY_DEFAULT};
+ 
+ const base::Feature kOptionalImagesEnabledFeature{
+-    "NTPRemoteSuggestionsOptionalImages", base::FEATURE_ENABLED_BY_DEFAULT};
++    "NTPRemoteSuggestionsOptionalImages", base::FEATURE_DISABLED_BY_DEFAULT};
+ 
+ std::vector<const base::Feature*> GetAllFeatures() {
+   // Skip the last feature as it's a nullptr.

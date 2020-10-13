@@ -1,0 +1,69 @@
+--- a/chrome/browser/about_flags.cc
++++ b/chrome/browser/about_flags.cc
+@@ -269,6 +269,19 @@ const FeatureEntry::Choice kExtensionHan
+      "always-prompt-for-install"},
+ };
+ 
++const FeatureEntry::Choice kShowAvatarButtonChoices[] = {
++    {flags_ui::kGenericExperimentChoiceDefault, "", ""},
++    {"Always",
++     "show-avatar-button",
++     "always"},
++    {"Incognito and Guest",
++     "show-avatar-button",
++     "incognito-and-guest"},
++    {"Never",
++     "show-avatar-button",
++     "never"}
++};
++
+ #if defined(USE_AURA)
+ const FeatureEntry::Choice kPullToRefreshChoices[] = {
+     {flags_ui::kGenericExperimentChoiceDefault, "", ""},
+@@ -4383,6 +4396,11 @@ const FeatureEntry kFeatureEntries[] = {
+      FEATURE_VALUE_TYPE(arc::kEnableUnifiedAudioFocusFeature)},
+ #endif  // defined(OS_CHROMEOS)
+ 
++    {"show-avatar-button",
++     "Show avatar/people/profile button",
++     "Show avatar/people/profile button in the browser toolbar", kOsDesktop,
++     MULTI_VALUE_TYPE(kShowAvatarButtonChoices)},
++
+ #if defined(OS_WIN)
+     {"use-angle", flag_descriptions::kUseAngleName,
+      flag_descriptions::kUseAngleDescription, kOsWin,
+--- a/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ b/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -223,14 +223,30 @@ void ToolbarView::Init() {
+ 
+   std::unique_ptr<ToolbarAccountIconContainerView>
+       toolbar_account_icon_container;
++
++  const base::CommandLine& command_line =
++      *base::CommandLine::ForCurrentProcess();
++  const std::string flag_value =
++      command_line.GetSwitchValueASCII("show-avatar-button");
++
++  bool in_incognito_or_guest_mode = browser_->profile()->IsOffTheRecord() ||
++                                    browser_->profile()->IsGuestSession();
++
+   bool show_avatar_toolbar_button = true;
+ #if defined(OS_CHROMEOS)
+   if (!base::FeatureList::IsEnabled(chromeos::features::kAvatarToolbarButton)) {
+     // ChromeOS only badges Incognito and Guest icons in the browser window.
+-    show_avatar_toolbar_button = browser_->profile()->IsOffTheRecord() ||
+-                                 browser_->profile()->IsGuestSession();
++    show_avatar_toolbar_button = in_incognito_or_guest_mode;
+   }
+ #endif
++
++  if (flag_value == "always")
++    show_avatar_toolbar_button = true;
++  else if (flag_value == "incognito-and-guest")
++    show_avatar_toolbar_button = in_incognito_or_guest_mode;
++  else if (flag_value == "never")
++    show_avatar_toolbar_button = false;
++
+   if (base::FeatureList::IsEnabled(
+           autofill::features::kAutofillEnableToolbarStatusChip)) {
+     // The avatar button is contained inside the page-action container and

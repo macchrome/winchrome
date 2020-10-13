@@ -1,0 +1,15 @@
+# Compiling Chromium 78 spams the console with unknown warnings.
+# This can be stopped by adding "-Wno-unknown-warning-option" to the cflags.
+
+--- a/build/config/win/BUILD.gn
++++ b/build/config/win/BUILD.gn
+@@ -64,7 +64,8 @@ config("compiler") {
+   ]
+ 
+   if (is_clang) {
+-    cflags += [ "/Zc:twoPhase" ]
++    cflags += [ "/Zc:twoPhase",
++                "-Wno-unknown-warning-option", ]
+   }
+ 
+   # Force C/C++ mode for the given GN detected file type. This is necessary

@@ -1,0 +1,38 @@
+# Fix building GN on Windows
+# Author: shiromichi on GitHub
+
+--- a/tools/gn/bootstrap/bootstrap.py
++++ b/tools/gn/bootstrap/bootstrap.py
+@@ -69,7 +69,7 @@ def main(argv):
+   else:
+     build_rel = os.path.join('out', 'Release')
+   out_dir = os.path.join(SRC_ROOT, build_rel)
+-  gn_path = options.output or os.path.join(out_dir, 'gn')
++  gn_path = options.output or os.path.join(out_dir, 'gn.exe')
+   gn_build_dir = os.path.join(out_dir, 'gn_build')
+   ninja_binary = os.environ.get('NINJA', 'ninja')
+ 
+@@ -123,11 +123,11 @@ def main(argv):
+       os.path.join(BOOTSTRAP_DIR, 'last_commit_position.h'), gn_build_dir)
+   if options.jobs:
+     subprocess.check_call(
+-        [ninja_binary, '-C', gn_build_dir, '-w', 'dupbuild=err', '-j'+str(options.jobs), 'gn'])
++        [ninja_binary, '-C', gn_build_dir, '-w', 'dupbuild=err', '-j'+str(options.jobs), 'gn.exe'])
+   else:
+     subprocess.check_call(
+-        [ninja_binary, '-C', gn_build_dir, '-w', 'dupbuild=err', 'gn'])
+-  shutil.copy2(os.path.join(gn_build_dir, 'gn'), gn_path)
++        [ninja_binary, '-C', gn_build_dir, '-w', 'dupbuild=err', 'gn.exe'])
++  shutil.copy2(os.path.join(gn_build_dir, 'gn.exe'), gn_path)
+ 
+   if not options.skip_generate_buildfiles:
+     gn_gen_args = options.gn_gen_args or ''
+--- a/tools/gn/build/build_win.ninja.template
++++ b/tools/gn/build/build_win.ninja.template
+@@ -1,5 +1,5 @@
+ rule cxx
+-  command = ninja -t msvc -- $cxx /nologo /showIncludes /FC $includes $cflags /c $in /Fo$out
++  command = ninja -t msvc -- $cxx /utf-8 /nologo /showIncludes /FC $includes $cflags /c $in /Fo$out
+   description = CXX $out
+   deps = msvc
+ 

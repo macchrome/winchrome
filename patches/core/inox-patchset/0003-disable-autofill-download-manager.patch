@@ -1,0 +1,97 @@
+--- a/components/autofill/core/browser/autofill_download_manager.cc
++++ b/components/autofill/core/browser/autofill_download_manager.cc
+@@ -842,94 +842,6 @@ AutofillDownloadManager::GetRequestURLAn
+ }
+ 
+ bool AutofillDownloadManager::StartRequest(FormRequestData request_data) {
+-  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory =
+-      driver_->GetURLLoaderFactory();
+-  DCHECK(url_loader_factory);
+-
+-  // Get the URL and method to use for this request.
+-  std::string method;
+-  GURL request_url;
+-  std::tie(request_url, method) =
+-      UseApi() ? GetRequestURLAndMethodForApi(request_data)
+-               : GetRequestURLAndMethod(request_data);
+-
+-  // Track the URL length for GET queries because the URL length can be in the
+-  // thousands when rich metadata is enabled.
+-  if (request_data.request_type == AutofillDownloadManager::REQUEST_QUERY &&
+-      method == "GET") {
+-    UMA_HISTOGRAM_COUNTS_100000("Autofill.Query.GetUrlLength",
+-                                request_url.spec().length());
+-  }
+-
+-  auto resource_request = std::make_unique<network::ResourceRequest>();
+-  resource_request->url = request_url;
+-  resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
+-  resource_request->method = method;
+-
+-  // On iOS we have a single, shared URLLoaderFactory provided by BrowserState.
+-  // As it is shared, it is not trusted and we cannot assign trusted_params
+-  // to the network request.
+-#if !defined(OS_IOS)
+-  resource_request->trusted_params = network::ResourceRequest::TrustedParams();
+-  resource_request->trusted_params->isolation_info = driver_->IsolationInfo();
+-#endif
+-
+-  // Add Chrome experiment state to the request headers.
+-  variations::AppendVariationsHeaderUnknownSignedIn(
+-      request_url,
+-      driver_->IsIncognito() ? variations::InIncognito::kYes
+-                             : variations::InIncognito::kNo,
+-      resource_request.get());
+-
+-  // Set headers specific to the API if using it.
+-  if (UseApi())
+-    // Encode response serialized proto in base64 for safety.
+-    resource_request->headers.SetHeader(kGoogEncodeResponseIfExecutable,
+-                                        "base64");
+-
+-  // Put API key in request's header if a key exists, and the endpoint is
+-  // trusted by Google.
+-  if (!api_key_.empty() && request_url.SchemeIs(url::kHttpsScheme) &&
+-      google_util::IsGoogleAssociatedDomainUrl(request_url)) {
+-    resource_request->headers.SetHeader(kGoogApiKey, api_key_);
+-  }
+-
+-  auto simple_loader = network::SimpleURLLoader::Create(
+-      std::move(resource_request),
+-      GetNetworkTrafficAnnotation(request_data.request_type));
+-
+-  // This allows reading the error message within the API response when status
+-  // is not 200 (e.g., 400). Otherwise, URL loader will not give any content in
+-  // the response when there is a failure, which makes debugging hard.
+-  simple_loader->SetAllowHttpErrorResults(true);
+-
+-  if (method == "POST") {
+-    const std::string content_type =
+-        UseApi() ? "application/x-protobuf" : "text/proto";
+-    std::string payload;
+-    if (UseApi()) {
+-      if (!GetAPIBodyPayload(request_data.payload, request_data.request_type,
+-                             &payload)) {
+-        return false;
+-      }
+-    } else {
+-      payload = request_data.payload;
+-    }
+-    // Attach payload data and add data format header.
+-    simple_loader->AttachStringForUpload(payload, content_type);
+-  }
+-
+-  // Transfer ownership of the loader into url_loaders_. Temporarily hang
+-  // onto the raw pointer to use it as a key and to kick off the request;
+-  // transferring ownership (std::move) invalidates the |simple_loader|
+-  // variable.
+-  auto* raw_simple_loader = simple_loader.get();
+-  url_loaders_.push_back(std::move(simple_loader));
+-  raw_simple_loader->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
+-      url_loader_factory.get(),
+-      base::BindOnce(&AutofillDownloadManager::OnSimpleLoaderComplete,
+-                     base::Unretained(this), std::move(--url_loaders_.end()),
+-                     std::move(request_data), AutofillTickClock::NowTicks()));
+   return true;
+ }
+ 

@@ -1,0 +1,39 @@
+# Add flag to force punycode in hostnames instead of Unicode when displaying Internationalized Domain Names (IDNs) to mitigate homograph attacks
+
+--- a/chrome/browser/about_flags.cc
++++ b/chrome/browser/about_flags.cc
+@@ -1984,6 +1984,10 @@ const FeatureEntry kFeatureEntries[] = {
+      "Disable search engine collection",
+      "Prevents search engines from being added automatically.",
+      kOsAll, SINGLE_VALUE_TYPE("disable-search-engine-collection")},
++    {"force-punycode-hostnames",
++     "Force punycode hostnames",
++     "Force punycode in hostnames instead of Unicode when displaying Internationalized Domain Names (IDNs).",
++     kOsAll, SINGLE_VALUE_TYPE("force-punycode-hostnames")},
+     {"ignore-gpu-blocklist", flag_descriptions::kIgnoreGpuBlocklistName,
+      flag_descriptions::kIgnoreGpuBlocklistDescription, kOsAll,
+      SINGLE_VALUE_TYPE(switches::kIgnoreGpuBlocklist)},
+--- a/components/url_formatter/url_formatter.cc
++++ b/components/url_formatter/url_formatter.cc
+@@ -8,6 +8,7 @@
+ #include <utility>
+ #include <vector>
+ 
++#include "base/command_line.h"
+ #include "base/lazy_instance.h"
+ #include "base/numerics/safe_conversions.h"
+ #include "base/stl_util.h"
+@@ -277,6 +278,13 @@ IDNConversionResult IDNToUnicodeWithAdju
+   host16.reserve(host.length());
+   host16.insert(host16.end(), host.begin(), host.end());
+ 
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch("force-punycode-hostnames")) {
++    // Leave as punycode.
++    IDNConversionResult result;
++    result.result = host16;
++    return result;
++  }
++
+   // Compute the top level domain to be used in spoof checks later.
+   base::StringPiece top_level_domain;
+   base::string16 top_level_domain_unicode;

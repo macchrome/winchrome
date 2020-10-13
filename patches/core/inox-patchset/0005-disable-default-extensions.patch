@@ -1,0 +1,112 @@
+--- a/chrome/browser/extensions/component_extensions_whitelist/whitelist.cc
++++ b/chrome/browser/extensions/component_extensions_whitelist/whitelist.cc
+@@ -26,7 +26,6 @@ namespace extensions {
+ 
+ bool IsComponentExtensionWhitelisted(const std::string& extension_id) {
+   const char* const kAllowed[] = {
+-    extension_misc::kInAppPaymentsSupportAppId,
+     extension_misc::kCastExtensionIdRelease,
+     extension_misc::kPdfExtensionId,
+ #if defined(OS_CHROMEOS)
+--- a/chrome/browser/extensions/component_loader.cc
++++ b/chrome/browser/extensions/component_loader.cc
+@@ -349,11 +349,6 @@ void ComponentLoader::AddWebStoreApp() {
+   if (!IsNormalSession())
+     return;
+ #endif
+-
+-  AddWithNameAndDescription(
+-      IDR_WEBSTORE_MANIFEST, base::FilePath(FILE_PATH_LITERAL("web_store")),
+-      l10n_util::GetStringUTF8(IDS_WEBSTORE_NAME_STORE),
+-      l10n_util::GetStringUTF8(IDS_WEBSTORE_APP_DESCRIPTION));
+ }
+ 
+ #if defined(OS_CHROMEOS)
+@@ -451,11 +446,6 @@ void ComponentLoader::AddDefaultComponen
+   AddKeyboardApp();
+ #else  // defined(OS_CHROMEOS)
+   DCHECK(!skip_session_components);
+-#if BUILDFLAG(ENABLE_PRINTING)
+-  // Cloud Print component app. Not required on Chrome OS.
+-  Add(IDR_CLOUDPRINT_MANIFEST,
+-      base::FilePath(FILE_PATH_LITERAL("cloud_print")));
+-#endif  // BUILDFLAG(ENABLE_PRINTING)
+ #endif  // defined(OS_CHROMEOS)
+ 
+   if (!skip_session_components) {
+@@ -529,18 +519,6 @@ void ComponentLoader::AddDefaultComponen
+     AddHangoutServicesExtension();
+ #endif  // BUILDFLAG(ENABLE_HANGOUT_SERVICES_EXTENSION)
+ 
+-    bool install_feedback = enable_background_extensions_during_testing;
+-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+-    install_feedback = true;
+-#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+-    if (install_feedback) {
+-      AddWithNameAndDescription(
+-          IDR_FEEDBACK_MANIFEST, base::FilePath(FILE_PATH_LITERAL("feedback")),
+-          l10n_util::GetStringUTF8(IDS_FEEDBACK_REPORT_APP_TITLE),
+-          // Description string
+-          l10n_util::GetStringUTF8(IDS_FEEDBACK_REPORT_PAGE_TITLE));
+-    }
+-
+ #if defined(OS_CHROMEOS)
+     AddChromeCameraApp();
+     AddVideoPlayerExtension();
+--- a/chrome/browser/extensions/external_component_loader.cc
++++ b/chrome/browser/extensions/external_component_loader.cc
+@@ -31,9 +31,6 @@ ExternalComponentLoader::~ExternalCompon
+ 
+ void ExternalComponentLoader::StartLoading() {
+   auto prefs = std::make_unique<base::DictionaryValue>();
+-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+-  AddExternalExtension(extension_misc::kInAppPaymentsSupportAppId, prefs.get());
+-#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+ 
+ #if defined(OS_CHROMEOS)
+   {
+--- a/chrome/browser/extensions/webstore_installer.cc
++++ b/chrome/browser/extensions/webstore_installer.cc
+@@ -560,20 +560,6 @@ void WebstoreInstaller::DownloadNextPend
+ void WebstoreInstaller::DownloadCrx(
+     const std::string& extension_id,
+     InstallSource source) {
+-  download_url_ = GetWebstoreInstallURL(extension_id, source);
+-  MaybeAppendAuthUserParameter(approval_->authuser, &download_url_);
+-
+-  base::FilePath user_data_dir;
+-  base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir);
+-  base::FilePath download_path = user_data_dir.Append(kWebstoreDownloadFolder);
+-
+-  base::FilePath download_directory(g_download_directory_for_tests ?
+-      *g_download_directory_for_tests : download_path);
+-
+-  base::PostTaskAndReplyWithResult(
+-      GetExtensionFileTaskRunner().get(), FROM_HERE,
+-      base::BindOnce(&GetDownloadFilePath, download_directory, extension_id),
+-      base::BindOnce(&WebstoreInstaller::StartDownload, this, extension_id));
+ }
+ 
+ // http://crbug.com/165634
+@@ -720,21 +706,6 @@ void WebstoreInstaller::UpdateDownloadPr
+ void WebstoreInstaller::StartCrxInstaller(const DownloadItem& download) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+   DCHECK(!crx_installer_.get());
+-
+-  ExtensionService* service = ExtensionSystem::Get(profile_)->
+-      extension_service();
+-  CHECK(service);
+-
+-  const Approval* approval = GetAssociatedApproval(download);
+-  DCHECK(approval);
+-
+-  crx_installer_ = download_crx_util::CreateCrxInstaller(profile_, download);
+-
+-  crx_installer_->set_expected_id(approval->extension_id);
+-  crx_installer_->set_is_gallery_install(true);
+-  crx_installer_->set_allow_silent_install(true);
+-
+-  crx_installer_->InstallCrx(download.GetFullPath());
+ }
+ 
+ void WebstoreInstaller::ReportFailure(const std::string& error,

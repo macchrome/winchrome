@@ -1,0 +1,27 @@
+# Disables browser sign-in
+
+--- a/chrome/browser/ui/chrome_pages.cc
++++ b/chrome/browser/ui/chrome_pages.cc
+@@ -531,22 +531,6 @@ GURL GetOSSettingsUrl(const std::string&
+ #if !defined(OS_ANDROID) && !defined(OS_CHROMEOS)
+ void ShowBrowserSignin(Browser* browser,
+                        signin_metrics::AccessPoint access_point) {
+-  Profile* original_profile = browser->profile()->GetOriginalProfile();
+-  DCHECK(original_profile->GetPrefs()->GetBoolean(prefs::kSigninAllowed));
+-
+-  // If the browser's profile is an incognito profile, make sure to use
+-  // a browser window from the original profile. The user cannot sign in
+-  // from an incognito window.
+-  auto displayer =
+-      std::make_unique<ScopedTabbedBrowserDisplayer>(original_profile);
+-  browser = displayer->browser();
+-
+-  profiles::BubbleViewMode bubble_view_mode =
+-      IdentityManagerFactory::GetForProfile(original_profile)
+-              ->HasPrimaryAccount()
+-          ? profiles::BUBBLE_VIEW_MODE_GAIA_REAUTH
+-          : profiles::BUBBLE_VIEW_MODE_GAIA_SIGNIN;
+-  browser->signin_view_controller()->ShowSignin(bubble_view_mode, access_point);
+ }
+ 
+ void ShowBrowserSigninOrSettings(Browser* browser,
