@@ -5,7 +5,6 @@ core/inox-patchset/0009-disable-google-ipv6-probes.patch
 core/inox-patchset/0015-disable-update-pings.patch
 core/inox-patchset/0017-disable-new-avatar-menu.patch
 core/inox-patchset/0021-disable-rlz.patch
-core/debian/disable/unrar.patch
 core/iridium-browser/all-add-trk-prefixes-to-possibly-evil-connections.patch
 core/ungoogled-chromium/disable-crash-reporter.patch
 core/ungoogled-chromium/disable-google-host-detection.patch
