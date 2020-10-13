@@ -1,0 +1,189 @@
+# Disables Chrome Webstore-related URLs and other internal functionality. Mainly for disabling auto updates via the Chrome Webstore.
+
+--- a/chrome/browser/extensions/chrome_content_browser_client_extensions_part.cc
++++ b/chrome/browser/extensions/chrome_content_browser_client_extensions_part.cc
+@@ -604,10 +604,6 @@ std::vector<url::Origin> ChromeContentBr
+     GetOriginsRequiringDedicatedProcess() {
+   std::vector<url::Origin> list;
+ 
+-  // Require a dedicated process for the webstore origin.  See
+-  // https://crbug.com/939108.
+-  list.push_back(url::Origin::Create(extension_urls::GetWebstoreLaunchURL()));
+-
+   return list;
+ }
+ 
+--- a/chrome/browser/extensions/chrome_content_verifier_delegate.cc
++++ b/chrome/browser/extensions/chrome_content_verifier_delegate.cc
+@@ -286,13 +286,7 @@ bool ChromeContentVerifierDelegate::IsFr
+   // between which extensions are considered in-store.
+   // See https://crbug.com/766806 for details.
+   if (!InstallVerifier::IsFromStore(extension)) {
+-    // It's possible that the webstore update url was overridden for testing
+-    // so also consider extensions with the default (production) update url
+-    // to be from the store as well.
+-    if (ManifestURL::GetUpdateURL(&extension) !=
+-        extension_urls::GetDefaultWebstoreUpdateUrl()) {
+-      return false;
+-    }
++    return false;
+   }
+   return true;
+ }
+--- a/chrome/browser/extensions/extension_migrator.cc
++++ b/chrome/browser/extensions/extension_migrator.cc
+@@ -18,7 +18,9 @@ namespace extensions {
+ ExtensionMigrator::ExtensionMigrator(Profile* profile,
+                                      const std::string& old_id,
+                                      const std::string& new_id)
+-    : profile_(profile), old_id_(old_id), new_id_(new_id) {}
++    : profile_(profile), old_id_(old_id), new_id_(new_id) {
++    chrome_blank_ = GURL("chrome://blank/");
++}
+ 
+ ExtensionMigrator::~ExtensionMigrator() {
+ }
+@@ -31,7 +33,7 @@ void ExtensionMigrator::StartLoading() {
+   if (should_have_extension) {
+     std::unique_ptr<base::DictionaryValue> entry(new base::DictionaryValue);
+     entry->SetKey(ExternalProviderImpl::kExternalUpdateUrl,
+-                  base::Value(extension_urls::GetWebstoreUpdateUrl().spec()));
++                  base::Value(chrome_blank_.spec()));
+ 
+     prefs->SetWithoutPathExpansion(new_id_, std::move(entry));
+   }
+--- a/chrome/browser/extensions/extension_migrator.h
++++ b/chrome/browser/extensions/extension_migrator.h
+@@ -9,6 +9,7 @@
+ 
+ #include "base/macros.h"
+ #include "chrome/browser/extensions/external_loader.h"
++#include "url/gurl.h"
+ 
+ class Profile;
+ 
+@@ -37,6 +38,7 @@ class ExtensionMigrator : public Externa
+   Profile* profile_;
+   const std::string old_id_;
+   const std::string new_id_;
++  GURL chrome_blank_;
+ 
+   DISALLOW_COPY_AND_ASSIGN(ExtensionMigrator);
+ };
+--- a/extensions/browser/updater/extension_downloader.cc
++++ b/extensions/browser/updater/extension_downloader.cc
+@@ -95,27 +95,18 @@ const char kNotFromWebstoreInstallSource
+ const char kDefaultInstallSource[] = "";
+ const char kReinstallInstallSource[] = "reinstall";
+ 
+-const char kGoogleDotCom[] = "google.com";
+ const char kTokenServiceConsumerId[] = "extension_downloader";
+ const char kWebstoreOAuth2Scope[] =
+-    "https://www.googleapis.com/auth/chromewebstore.readonly";
++    "trk:10:https://www.googleapis.com/auth/chromewebstore.readonly";
+ 
+ ExtensionDownloaderTestDelegate* g_test_delegate = nullptr;
+ 
+ #define RETRY_HISTOGRAM(name, retry_count, url)                           \
+-  if ((url).DomainIs(kGoogleDotCom)) {                                    \
+-    UMA_HISTOGRAM_CUSTOM_COUNTS("Extensions." name "RetryCountGoogleUrl", \
+-                                retry_count,                              \
+-                                1,                                        \
+-                                kMaxRetries,                              \
+-                                kMaxRetries + 1);                         \
+-  } else {                                                                \
+     UMA_HISTOGRAM_CUSTOM_COUNTS("Extensions." name "RetryCountOtherUrl",  \
+                                 retry_count,                              \
+                                 1,                                        \
+                                 kMaxRetries,                              \
+-                                kMaxRetries + 1);                         \
+-  }
++                                kMaxRetries + 1);
+ 
+ bool ShouldRetryRequest(const network::SimpleURLLoader* loader) {
+   DCHECK(loader);
+@@ -329,12 +320,6 @@ void ExtensionDownloader::DoStartAllPend
+   ReportStats();
+   url_stats_ = URLStats();
+ 
+-  for (auto it = fetches_preparing_.begin(); it != fetches_preparing_.end();
+-       ++it) {
+-    std::vector<std::unique_ptr<ManifestFetchData>>& list = it->second;
+-    for (size_t i = 0; i < list.size(); ++i)
+-      StartUpdateCheck(std::move(list[i]));
+-  }
+   fetches_preparing_.clear();
+ }
+ 
+@@ -373,11 +358,6 @@ bool ExtensionDownloader::AddExtensionDa
+     return false;
+   }
+ 
+-  // Make sure we use SSL for store-hosted extensions.
+-  if (extension_urls::IsWebstoreUpdateUrl(update_url) &&
+-      !update_url.SchemeIsCryptographic())
+-    update_url = extension_urls::GetWebstoreUpdateUrl();
+-
+   // Skip extensions with empty IDs.
+   if (id.empty()) {
+     DLOG(WARNING) << "Found extension with empty ID";
+@@ -386,12 +366,10 @@ bool ExtensionDownloader::AddExtensionDa
+     return false;
+   }
+ 
+-  if (update_url.DomainIs(kGoogleDotCom)) {
+-    url_stats_.google_url_count++;
+-  } else if (update_url.is_empty()) {
++  if (update_url.is_empty()) {
+     url_stats_.no_url_count++;
+     // Fill in default update URL.
+-    update_url = extension_urls::GetWebstoreUpdateUrl();
++    update_url = GURL("chrome://blank/");
+   } else {
+     url_stats_.other_url_count++;
+   }
+@@ -852,20 +830,6 @@ void ExtensionDownloader::HandleManifest
+                           update->info);
+   }
+ 
+-  // If the manifest response included a <daystart> element, we want to save
+-  // that value for any extensions which had sent a ping in the request.
+-  if (fetch_data->base_url().DomainIs(kGoogleDotCom) &&
+-      results->daystart_elapsed_seconds >= 0) {
+-    Time day_start =
+-        Time::Now() - TimeDelta::FromSeconds(results->daystart_elapsed_seconds);
+-
+-    for (const ExtensionId& id : extension_ids) {
+-      ExtensionDownloaderDelegate::PingResult& result = ping_results_[id];
+-      result.did_ping = fetch_data->DidPing(id, ManifestFetchData::ROLLCALL);
+-      result.day_start = day_start;
+-    }
+-  }
+-
+   NotifyExtensionsDownloadStageChanged(
+       no_updates, ExtensionDownloaderDelegate::Stage::FINISHED);
+   NotifyExtensionsDownloadFailed(
+@@ -1414,11 +1378,7 @@ bool ExtensionDownloader::IterateFetchCr
+   // fetch.
+   switch (fetch->credentials) {
+     case ExtensionFetch::CREDENTIALS_NONE:
+-      if (fetch->url.DomainIs(kGoogleDotCom) && identity_manager_) {
+-        fetch->credentials = ExtensionFetch::CREDENTIALS_OAUTH2_TOKEN;
+-      } else {
+-        fetch->credentials = ExtensionFetch::CREDENTIALS_COOKIES;
+-      }
++      fetch->credentials = ExtensionFetch::CREDENTIALS_COOKIES;
+       return true;
+     case ExtensionFetch::CREDENTIALS_OAUTH2_TOKEN:
+       fetch->oauth2_attempt_count++;
+--- a/extensions/common/extension_urls.cc
++++ b/extensions/common/extension_urls.cc
+@@ -26,7 +26,7 @@ bool IsSourceFromAnExtension(const base:
+ 
+ namespace extension_urls {
+ 
+-const char kChromeWebstoreBaseURL[] = "https://chrome.google.com/webstore";
++const char kChromeWebstoreBaseURL[] = "trk:09:https://chrome.google.com/webstore";
+ const char kChromeWebstoreUpdateURL[] =
+     "trk:05:https://clients2.google.com/service/update2/crx";
+ 

@@ -1,0 +1,43 @@
+From: csagan5 <32685696+csagan5@users.noreply.github.com>
+Date: Mon, 12 Feb 2018 21:37:52 +0100
+Subject: ungoogled-chromium: Disable Gaia
+
+Disables Gaia code.
+Somehow it is still being activated even without being signed-in.
+
+See also: https://github.com/Eloston/ungoogled-chromium/issues/104
+---
+ google_apis/gaia/gaia_auth_fetcher.cc | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/google_apis/gaia/gaia_auth_fetcher.cc b/google_apis/gaia/gaia_auth_fetcher.cc
+--- a/google_apis/gaia/gaia_auth_fetcher.cc
++++ b/google_apis/gaia/gaia_auth_fetcher.cc
+@@ -39,7 +39,7 @@
+ 
+ namespace {
+ 
+-const size_t kMaxMessageSize = 1024 * 1024;  // 1MB
++//const size_t kMaxMessageSize = 1024 * 1024;  // 1MB
+ 
+ constexpr char kBadAuthenticationError[] = "BadAuthentication";
+ constexpr char kBadAuthenticationShortError[] = "badauth";
+@@ -295,6 +295,7 @@ void GaiaAuthFetcher::CreateAndStartGaiaFetcher(
+     const net::NetworkTrafficAnnotationTag& traffic_annotation) {
+   DCHECK(!fetch_pending_) << "Tried to fetch two things at once!";
+ 
++/*
+   auto resource_request = std::make_unique<network::ResourceRequest>();
+   resource_request->url = gaia_gurl;
+   original_url_ = gaia_gurl;
+@@ -353,6 +354,7 @@ void GaiaAuthFetcher::CreateAndStartGaiaFetcher(
+       base::BindOnce(&GaiaAuthFetcher::OnURLLoadComplete,
+                      base::Unretained(this)),
+       kMaxMessageSize);
++*/
+ }
+ 
+ // static
+-- 
+2.17.1
+

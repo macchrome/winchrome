@@ -1,0 +1,1218 @@
+# Additional changes to Inox's fix-building-without-safebrowsing.patch
+
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -4035,11 +4035,13 @@ ChromeContentBrowserClient::CreateThrott
+       &throttles);
+ #endif
+ 
++#if BUILDFLAG(FULL_SAFE_BROWSING)
+   if (base::FeatureList::IsEnabled(safe_browsing::kDelayedWarnings)) {
+     throttles.push_back(
+         std::make_unique<safe_browsing::DelayedWarningNavigationThrottle>(
+             handle));
+   }
++#endif
+ 
+ #if defined(OS_WIN) || defined(OS_MACOSX) || \
+     (defined(OS_LINUX) && !defined(OS_CHROMEOS))
+@@ -5092,20 +5094,7 @@ ChromeContentBrowserClient::GetSafeBrows
+     bool should_check_on_sb_disabled) {
+   DCHECK_CURRENTLY_ON(BrowserThread::IO);
+ 
+-  // Should not bypass safe browsing check if the check is for enterprise
+-  // lookup.
+-  if (!safe_browsing_enabled_for_profile && !should_check_on_sb_disabled)
+-    return nullptr;
+-
+-  // |safe_browsing_service_| may be unavailable in tests.
+-  if (safe_browsing_service_ && !safe_browsing_url_checker_delegate_) {
+-    safe_browsing_url_checker_delegate_ =
+-        base::MakeRefCounted<safe_browsing::UrlCheckerDelegateImpl>(
+-            safe_browsing_service_->database_manager(),
+-            safe_browsing_service_->ui_manager());
+-  }
+-
+-  return safe_browsing_url_checker_delegate_;
++  return nullptr;
+ }
+ 
+ safe_browsing::RealTimeUrlLookupServiceBase*
+--- a/chrome/browser/download/chrome_download_manager_delegate.cc
++++ b/chrome/browser/download/chrome_download_manager_delegate.cc
+@@ -122,7 +122,6 @@ using content::DownloadManager;
+ using download::DownloadItem;
+ using download::DownloadPathReservationTracker;
+ using download::PathValidationResult;
+-using safe_browsing::DownloadFileType;
+ using safe_browsing::DownloadProtectionService;
+ 
+ namespace {
+@@ -1325,8 +1324,6 @@ void ChromeDownloadManagerDelegate::OnDo
+     if (item->GetOriginalMimeType() == "application/x-x509-user-cert")
+       DownloadItemModel(item).SetShouldPreferOpeningInBrowser(true);
+ #endif
+-
+-    DownloadItemModel(item).SetDangerLevel(target_info->danger_level);
+   }
+   if (ShouldBlockFile(target_info->danger_type, item)) {
+     target_info->result = download::DOWNLOAD_INTERRUPT_REASON_FILE_BLOCKED;
+--- a/chrome/browser/download/download_item_model.cc
++++ b/chrome/browser/download/download_item_model.cc
+@@ -27,16 +27,12 @@
+ #include "chrome/browser/enterprise/connectors/common.h"
+ #include "chrome/browser/enterprise/connectors/connectors_manager.h"
+ #include "chrome/browser/profiles/profile.h"
+-#include "chrome/browser/safe_browsing/download_protection/deep_scanning_request.h"
+-#include "chrome/browser/safe_browsing/download_protection/download_feedback_service.h"
+ #include "chrome/grit/chromium_strings.h"
+ #include "chrome/grit/generated_resources.h"
+ #include "components/download/public/common/download_danger_type.h"
+ #include "components/download/public/common/download_interrupt_reasons.h"
+ #include "components/download/public/common/download_item.h"
+ #include "components/safe_browsing/buildflags.h"
+-#include "components/safe_browsing/core/file_type_policies.h"
+-#include "components/safe_browsing/core/proto/download_file_types.pb.h"
+ #include "content/public/browser/download_item_utils.h"
+ #include "ui/base/l10n/l10n_util.h"
+ #include "ui/base/l10n/time_format.h"
+@@ -49,7 +45,6 @@
+ using base::TimeDelta;
+ using download::DownloadItem;
+ using MixedContentStatus = download::DownloadItem::MixedContentStatus;
+-using safe_browsing::DownloadFileType;
+ 
+ namespace {
+ 
+@@ -79,10 +74,6 @@ class DownloadItemModelData : public bas
+   // for the file type.
+   bool should_prefer_opening_in_browser_;
+ 
+-  // Danger level of the file determined based on the file type and whether
+-  // there was a user action associated with the download.
+-  safe_browsing::DownloadFileType::DangerLevel danger_level_;
+-
+   // Whether the download is currently being revived.
+   bool is_being_revived_;
+ 
+@@ -118,7 +109,6 @@ DownloadItemModelData::DownloadItemModel
+     : should_show_in_shelf_(true),
+       was_ui_notified_(false),
+       should_prefer_opening_in_browser_(false),
+-      danger_level_(safe_browsing::DownloadFileType::NOT_DANGEROUS),
+       is_being_revived_(false) {}
+ 
+ } // namespace
+@@ -298,14 +288,7 @@ bool DownloadItemModel::IsMixedContent()
+ }
+ 
+ bool DownloadItemModel::ShouldAllowDownloadFeedback() const {
+-#if BUILDFLAG(FULL_SAFE_BROWSING)
+-  if (!IsDangerous())
+-    return false;
+-  return safe_browsing::DownloadFeedbackService::IsEnabledForDownload(
+-      *download_);
+-#else
+   return false;
+-#endif
+ }
+ 
+ bool DownloadItemModel::ShouldRemoveFromShelfWhenComplete() const {
+@@ -402,17 +385,6 @@ void DownloadItemModel::SetShouldPreferO
+   data->should_prefer_opening_in_browser_ = preference;
+ }
+ 
+-safe_browsing::DownloadFileType::DangerLevel DownloadItemModel::GetDangerLevel() const {
+-  const DownloadItemModelData* data = DownloadItemModelData::Get(download_);
+-  return data ? data->danger_level_ : safe_browsing::DownloadFileType::NOT_DANGEROUS;
+-}
+-
+-void DownloadItemModel::SetDangerLevel(
+-    safe_browsing::DownloadFileType::DangerLevel danger_level) {
+-  DownloadItemModelData* data = DownloadItemModelData::GetOrCreate(download_);
+-  data->danger_level_ = danger_level;
+-}
+-
+ download::DownloadItem::MixedContentStatus
+ DownloadItemModel::GetMixedContentStatus() const {
+   return download_->GetMixedContentStatus();
+--- a/chrome/browser/download/download_item_model.h
++++ b/chrome/browser/download/download_item_model.h
+@@ -13,7 +13,6 @@
+ #include "chrome/browser/download/download_ui_model.h"
+ #include "components/download/public/common/download_item.h"
+ #include "components/safe_browsing/buildflags.h"
+-#include "components/safe_browsing/core/proto/download_file_types.pb.h"
+ 
+ // Implementation of DownloadUIModel that wrappers around a |DownloadItem*|. As
+ // such, the caller is expected to ensure that the |download| passed into the
+@@ -50,9 +49,6 @@ class DownloadItemModel : public Downloa
+   void SetWasUINotified(bool should_notify) override;
+   bool ShouldPreferOpeningInBrowser() const override;
+   void SetShouldPreferOpeningInBrowser(bool preference) override;
+-  safe_browsing::DownloadFileType::DangerLevel GetDangerLevel() const override;
+-  void SetDangerLevel(
+-      safe_browsing::DownloadFileType::DangerLevel danger_level) override;
+   download::DownloadItem::MixedContentStatus GetMixedContentStatus()
+       const override;
+   void OpenUsingPlatformHandler() override;
+--- a/chrome/browser/download/download_target_determiner.cc
++++ b/chrome/browser/download/download_target_determiner.cc
+@@ -61,7 +61,6 @@
+ using content::BrowserThread;
+ using download::DownloadItem;
+ using download::DownloadPathReservationTracker;
+-using safe_browsing::DownloadFileType;
+ 
+ namespace {
+ 
+@@ -101,8 +100,6 @@ DownloadTargetDeterminer::DownloadTarget
+       should_notify_extensions_(false),
+       create_target_directory_(false),
+       conflict_action_(conflict_action),
+-      danger_type_(download->GetDangerType()),
+-      danger_level_(DownloadFileType::NOT_DANGEROUS),
+       virtual_path_(initial_virtual_path),
+       is_filetype_handled_safely_(false),
+ #if defined(OS_ANDROID)
+@@ -772,24 +769,12 @@ DownloadTargetDeterminer::Result
+   DCHECK(!virtual_path_.empty());
+   next_state_ = STATE_CHECK_VISITED_REFERRER_BEFORE;
+ 
+-  // If user has validated a dangerous download, don't check.
+-  if (danger_type_ == download::DOWNLOAD_DANGER_TYPE_USER_VALIDATED)
+-    return CONTINUE;
+-
+-  delegate_->CheckDownloadUrl(
+-      download_,
+-      virtual_path_,
+-      base::Bind(&DownloadTargetDeterminer::CheckDownloadUrlDone,
+-                 weak_ptr_factory_.GetWeakPtr()));
+-  return QUIT_DOLOOP;
++  return CONTINUE;
+ }
+ 
+-void DownloadTargetDeterminer::CheckDownloadUrlDone(
+-    download::DownloadDangerType danger_type) {
++void DownloadTargetDeterminer::CheckDownloadUrlDone() {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+-  DVLOG(20) << "URL Check Result:" << danger_type;
+   DCHECK_EQ(STATE_CHECK_VISITED_REFERRER_BEFORE, next_state_);
+-  danger_type_ = danger_type;
+   DoLoop();
+ }
+ 
+@@ -798,50 +783,6 @@ DownloadTargetDeterminer::Result
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+   next_state_ = STATE_DETERMINE_INTERMEDIATE_PATH;
+ 
+-  // Checking if there are prior visits to the referrer is only necessary if the
+-  // danger level of the download depends on the file type.
+-  if (danger_type_ != download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS &&
+-      danger_type_ != download::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT &&
+-      danger_type_ != download::DOWNLOAD_DANGER_TYPE_WHITELISTED_BY_POLICY) {
+-    return CONTINUE;
+-  }
+-
+-  // First determine the danger level assuming that the user doesn't have any
+-  // prior visits to the referrer recoreded in history. The resulting danger
+-  // level would be ALLOW_ON_USER_GESTURE if the level depends on the visit
+-  // history. In the latter case, we can query the history DB to determine if
+-  // there were prior requests and determine the danger level again once the
+-  // result is available.
+-  danger_level_ = GetDangerLevel(NO_VISITS_TO_REFERRER);
+-
+-  if (danger_level_ == DownloadFileType::NOT_DANGEROUS)
+-    return CONTINUE;
+-
+-  if (danger_level_ == DownloadFileType::ALLOW_ON_USER_GESTURE) {
+-    // HistoryServiceFactory redirects incognito profiles to on-record profiles.
+-    // There's no history for on-record profiles in unit_tests.
+-    history::HistoryService* history_service =
+-        HistoryServiceFactory::GetForProfile(
+-            GetProfile(), ServiceAccessType::EXPLICIT_ACCESS);
+-
+-    if (history_service && download_->GetReferrerUrl().is_valid()) {
+-      history_service->GetVisibleVisitCountToHost(
+-          download_->GetReferrerUrl(),
+-          base::BindOnce(
+-              &VisitCountsToVisitedBefore,
+-              base::BindOnce(
+-                  &DownloadTargetDeterminer::CheckVisitedReferrerBeforeDone,
+-                  weak_ptr_factory_.GetWeakPtr())),
+-          &history_tracker_);
+-      return QUIT_DOLOOP;
+-    }
+-  }
+-
+-  // If the danger level doesn't depend on having visited the refererrer URL or
+-  // if original profile doesn't have a HistoryService or the referrer url is
+-  // invalid, then assume the referrer has not been visited before.
+-  if (danger_type_ == download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS)
+-    danger_type_ = download::DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE;
+   return CONTINUE;
+ }
+ 
+@@ -849,11 +790,6 @@ void DownloadTargetDeterminer::CheckVisi
+     bool visited_referrer_before) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+   DCHECK_EQ(STATE_DETERMINE_INTERMEDIATE_PATH, next_state_);
+-  danger_level_ = GetDangerLevel(
+-      visited_referrer_before ? VISITED_REFERRER : NO_VISITS_TO_REFERRER);
+-  if (danger_level_ != DownloadFileType::NOT_DANGEROUS &&
+-      danger_type_ == download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS)
+-    danger_type_ = download::DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE;
+   DoLoop();
+ }
+ 
+@@ -895,58 +831,31 @@ DownloadTargetDeterminer::Result
+   // target path. In practice the temporary download file that was created prior
+   // to download filename determination is already named
+   // download_->GetForcedFilePath().
+-  if (danger_type_ == download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS &&
+-      !download_->GetForcedFilePath().empty()) {
++  if(!download_->GetForcedFilePath().empty()) {
+     DCHECK_EQ(download_->GetForcedFilePath().value(), local_path_.value());
+     intermediate_path_ = local_path_;
+     return COMPLETE;
+   }
+ 
+   // Transient downloads don't need to be renamed to intermediate file.
+-  if (danger_type_ == download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS &&
+-      download_->IsTransient()) {
++  if(download_->IsTransient()) {
+     intermediate_path_ = local_path_;
+     return COMPLETE;
+   }
+ 
+-  // Other safe downloads get a .crdownload suffix for their intermediate name.
+-  if (danger_type_ == download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS) {
+-    intermediate_path_ = GetCrDownloadPath(local_path_);
+-    return COMPLETE;
+-  }
+-
+   // If this is a resumed download, then re-use the existing intermediate path
+   // if one is available. A resumed download shouldn't cause a non-dangerous
+   // download to be considered dangerous upon resumption. Therefore the
+   // intermediate file should already be in the correct form.
+   if (is_resumption_ && !download_->GetFullPath().empty() &&
+       local_path_.DirName() == download_->GetFullPath().DirName()) {
+-    DCHECK_NE(download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
+-              download_->GetDangerType());
+     DCHECK_EQ(kCrdownloadSuffix, download_->GetFullPath().Extension());
+     intermediate_path_ = download_->GetFullPath();
+     return COMPLETE;
+   }
+ 
+-  // Dangerous downloads receive a random intermediate name that looks like:
+-  // 'Unconfirmed <random>.crdownload'.
+-  const base::FilePath::CharType kUnconfirmedFormatSuffix[] =
+-      FILE_PATH_LITERAL(" %d.crdownload");
+-  // Range of the <random> uniquifier.
+-  const int kUnconfirmedUniquifierRange = 1000000;
+-#if defined(OS_WIN)
+-  base::string16 unconfirmed_format =
+-      l10n_util::GetStringUTF16(IDS_DOWNLOAD_UNCONFIRMED_PREFIX);
+-#else
+-  std::string unconfirmed_format =
+-      l10n_util::GetStringUTF8(IDS_DOWNLOAD_UNCONFIRMED_PREFIX);
+-#endif
+-  unconfirmed_format.append(kUnconfirmedFormatSuffix);
+-
+-  base::FilePath::StringType file_name = base::StringPrintf(
+-      unconfirmed_format.c_str(),
+-      base::RandInt(0, kUnconfirmedUniquifierRange));
+-  intermediate_path_ = local_path_.DirName().Append(file_name);
++  // Other safe downloads get a .crdownload suffix for their intermediate name.
++  intermediate_path_ = GetCrDownloadPath(local_path_);
+   return COMPLETE;
+ }
+ 
+@@ -957,8 +866,6 @@ void DownloadTargetDeterminer::ScheduleC
+             << " Local:" << local_path_.AsUTF8Unsafe()
+             << " Intermediate:" << intermediate_path_.AsUTF8Unsafe()
+             << " Confirmation reason:" << static_cast<int>(confirmation_reason_)
+-            << " Danger type:" << danger_type_
+-            << " Danger level:" << danger_level_
+             << " Result:" << static_cast<int>(result);
+   std::unique_ptr<DownloadTargetInfo> target_info(new DownloadTargetInfo);
+ 
+@@ -969,8 +876,6 @@ void DownloadTargetDeterminer::ScheduleC
+                confirmation_reason_ != DownloadConfirmationReason::NONE
+            ? DownloadItem::TARGET_DISPOSITION_PROMPT
+            : DownloadItem::TARGET_DISPOSITION_OVERWRITE);
+-  target_info->danger_type = danger_type_;
+-  target_info->danger_level = danger_level_;
+   target_info->intermediate_path = intermediate_path_;
+   target_info->mime_type = mime_type_;
+   target_info->is_filetype_handled_safely = is_filetype_handled_safely_;
+@@ -1059,33 +964,6 @@ bool DownloadTargetDeterminer::HasPrompt
+                                 DownloadItem::TARGET_DISPOSITION_PROMPT);
+ }
+ 
+-DownloadFileType::DangerLevel DownloadTargetDeterminer::GetDangerLevel(
+-    PriorVisitsToReferrer visits) const {
+-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+-
+-  // If the user has has been prompted or will be, assume that the user has
+-  // approved the download. A programmatic download is considered safe unless it
+-  // contains malware.
+-  if (HasPromptedForPath() ||
+-      confirmation_reason_ != DownloadConfirmationReason::NONE ||
+-      !download_->GetForcedFilePath().empty())
+-    return DownloadFileType::NOT_DANGEROUS;
+-
+-  // User-initiated extension downloads from pref-whitelisted sources are not
+-  // considered dangerous.
+-  if (download_->HasUserGesture() &&
+-      download_crx_util::IsTrustedExtensionDownload(GetProfile(), *download_)) {
+-    return DownloadFileType::NOT_DANGEROUS;
+-  }
+-
+-  // Anything the user has marked auto-open is OK if it's user-initiated.
+-  if (download_prefs_->IsAutoOpenEnabled(download_->GetURL(), virtual_path_) &&
+-      download_->HasUserGesture())
+-    return DownloadFileType::NOT_DANGEROUS;
+-
+-  return DownloadFileType::NOT_DANGEROUS;
+-}
+-
+ void DownloadTargetDeterminer::OnDownloadDestroyed(
+     DownloadItem* download) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+--- a/chrome/browser/download/download_target_determiner.h
++++ b/chrome/browser/download/download_target_determiner.h
+@@ -19,7 +19,6 @@
+ #include "components/download/public/common/download_danger_type.h"
+ #include "components/download/public/common/download_item.h"
+ #include "components/download/public/common/download_path_reservation_tracker.h"
+-#include "components/safe_browsing/core/proto/download_file_types.pb.h"
+ #include "content/public/browser/download_manager_delegate.h"
+ #include "ppapi/buildflags/buildflags.h"
+ 
+@@ -267,7 +266,7 @@ class DownloadTargetDeterminer : public
+ 
+   // Callback invoked after the delegate has checked the download URL. Sets the
+   // danger type of the download to |danger_type|.
+-  void CheckDownloadUrlDone(download::DownloadDangerType danger_type);
++  void CheckDownloadUrlDone();
+ 
+   // Checks if the user has visited the referrer URL of the download prior to
+   // today. The actual check is only performed if it would be needed to
+@@ -316,16 +315,6 @@ class DownloadTargetDeterminer : public
+   // operation.
+   bool HasPromptedForPath() const;
+ 
+-  // Returns true if this download should show the "dangerous file" warning.
+-  // Various factors are considered, such as the type of the file, whether a
+-  // user action initiated the download, and whether the user has explicitly
+-  // marked the file type as "auto open". Protected virtual for testing.
+-  //
+-  // If |require_explicit_consent| is non-null then the pointed bool will be set
+-  // to true if the download requires explicit user consent.
+-  safe_browsing::DownloadFileType::DangerLevel GetDangerLevel(
+-      PriorVisitsToReferrer visits) const;
+-
+   // Generates the download file name based on information from URL, response
+   // headers and sniffed mime type.
+   base::FilePath GenerateFileName() const;
+@@ -340,8 +329,6 @@ class DownloadTargetDeterminer : public
+   bool create_target_directory_;
+   download::DownloadPathReservationTracker::FilenameConflictAction
+       conflict_action_;
+-  download::DownloadDangerType danger_type_;
+-  safe_browsing::DownloadFileType::DangerLevel danger_level_;
+   base::FilePath virtual_path_;
+   base::FilePath local_path_;
+   base::FilePath intermediate_path_;
+--- a/chrome/browser/download/download_target_info.cc
++++ b/chrome/browser/download/download_target_info.cc
+@@ -9,7 +9,6 @@
+ DownloadTargetInfo::DownloadTargetInfo()
+     : target_disposition(download::DownloadItem::TARGET_DISPOSITION_OVERWRITE),
+       danger_type(download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS),
+-      danger_level(safe_browsing::DownloadFileType::NOT_DANGEROUS),
+       is_filetype_handled_safely(false),
+       result(download::DOWNLOAD_INTERRUPT_REASON_NONE),
+       mixed_content_status(
+--- a/chrome/browser/download/download_target_info.h
++++ b/chrome/browser/download/download_target_info.h
+@@ -13,7 +13,6 @@
+ #include "components/download/public/common/download_interrupt_reasons.h"
+ #include "components/download/public/common/download_item.h"
+ #include "components/download/public/common/download_schedule.h"
+-#include "components/safe_browsing/core/proto/download_file_types.pb.h"
+ 
+ struct DownloadTargetInfo {
+   DownloadTargetInfo();
+@@ -58,7 +57,6 @@ struct DownloadTargetInfo {
+   //       UNKONWN, the file will still be conisdered a DANGEROUS_FILE. However,
+   //       SafeBrowsing may flag the file as being malicious, in which case the
+   //       malicious classification should take precedence.
+-  safe_browsing::DownloadFileType::DangerLevel danger_level;
+ 
+   // Suggested intermediate path. The downloaded bytes should be written to this
+   // path until all the bytes are available and the user has accepted a
+--- a/chrome/browser/download/download_ui_model.cc
++++ b/chrome/browser/download/download_ui_model.cc
+@@ -33,7 +33,6 @@
+ 
+ using base::TimeDelta;
+ using download::DownloadItem;
+-using safe_browsing::DownloadFileType;
+ using offline_items_collection::FailState;
+ 
+ namespace {
+@@ -426,13 +425,6 @@ bool DownloadUIModel::ShouldPreferOpenin
+ 
+ void DownloadUIModel::SetShouldPreferOpeningInBrowser(bool preference) {}
+ 
+-DownloadFileType::DangerLevel DownloadUIModel::GetDangerLevel() const {
+-  return DownloadFileType::NOT_DANGEROUS;
+-}
+-
+-void DownloadUIModel::SetDangerLevel(
+-    DownloadFileType::DangerLevel danger_level) {}
+-
+ download::DownloadItem::MixedContentStatus
+ DownloadUIModel::GetMixedContentStatus() const {
+   return download::DownloadItem::MixedContentStatus::UNKNOWN;
+--- a/chrome/browser/download/download_ui_model.h
++++ b/chrome/browser/download/download_ui_model.h
+@@ -17,7 +17,6 @@
+ #include "components/download/public/common/download_item.h"
+ #include "components/offline_items_collection/core/offline_item.h"
+ #include "components/safe_browsing/buildflags.h"
+-#include "components/safe_browsing/core/proto/download_file_types.pb.h"
+ 
+ #if !defined(OS_ANDROID)
+ #include "chrome/browser/download/download_commands.h"
+@@ -168,15 +167,6 @@ class DownloadUIModel {
+   // Change what's returned by ShouldPreferOpeningInBrowser to |preference|.
+   virtual void SetShouldPreferOpeningInBrowser(bool preference);
+ 
+-  // Return the danger level determined during download target determination.
+-  // The value returned here is independent of the danger level as determined by
+-  // the Safe Browsing.
+-  virtual safe_browsing::DownloadFileType::DangerLevel GetDangerLevel() const;
+-
+-  // Change what's returned by GetDangerLevel().
+-  virtual void SetDangerLevel(
+-      safe_browsing::DownloadFileType::DangerLevel danger_level);
+-
+   // Return the mixed content status determined during download target
+   // determination.
+   virtual download::DownloadItem::MixedContentStatus GetMixedContentStatus()
+--- a/chrome/browser/media/webrtc/display_media_access_handler.cc
++++ b/chrome/browser/media/webrtc/display_media_access_handler.cc
+@@ -101,6 +101,7 @@ void DisplayMediaAccessHandler::HandleRe
+     return;
+   }
+ 
++  #if BUILDFLAG(FULL_SAFE_BROWSING)
+   // SafeBrowsing Delayed Warnings experiment can delay some SafeBrowsing
+   // warnings until user interaction. If the current page has a delayed warning,
+   // it'll have a user interaction observer attached. Show the warning
+@@ -115,6 +116,7 @@ void DisplayMediaAccessHandler::HandleRe
+     observer->OnDesktopCaptureRequest();
+     return;
+   }
++  #endif // BUILDFLAG(FULL_SAFE_BROWSING)
+ 
+ #if defined(OS_MACOSX)
+   // Do not allow picker UI to be shown on a page that isn't in the foreground
+--- a/chrome/browser/native_file_system/chrome_native_file_system_permission_context.cc
++++ b/chrome/browser/native_file_system/chrome_native_file_system_permission_context.cc
+@@ -18,7 +18,6 @@
+ #include "chrome/browser/native_file_system/native_file_system_permission_context_factory.h"
+ #include "chrome/browser/native_file_system/native_file_system_permission_request_manager.h"
+ #include "chrome/browser/profiles/profile.h"
+-#include "chrome/browser/safe_browsing/download_protection/download_protection_service.h"
+ #include "chrome/browser/ui/native_file_system_dialogs.h"
+ #include "chrome/common/chrome_paths.h"
+ #include "components/content_settings/core/browser/host_content_settings_map.h"
+@@ -184,79 +183,6 @@ BindResultCallbackToCurrentSequence(
+       base::SequencedTaskRunnerHandle::Get(), std::move(callback));
+ }
+ 
+-void DoSafeBrowsingCheckOnUIThread(
+-    content::GlobalFrameRoutingId frame_id,
+-    std::unique_ptr<content::NativeFileSystemWriteItem> item,
+-    safe_browsing::CheckDownloadCallback callback) {
+-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+-  // Download Protection Service is not supported on Android.
+-#if BUILDFLAG(FULL_SAFE_BROWSING)
+-  safe_browsing::SafeBrowsingService* sb_service =
+-      g_browser_process->safe_browsing_service();
+-  if (!sb_service || !sb_service->download_protection_service() ||
+-      !sb_service->download_protection_service()->enabled()) {
+-    std::move(callback).Run(safe_browsing::DownloadCheckResult::UNKNOWN);
+-    return;
+-  }
+-
+-  if (!item->browser_context) {
+-    content::RenderProcessHost* rph =
+-        content::RenderProcessHost::FromID(frame_id.child_id);
+-    if (!rph) {
+-      std::move(callback).Run(safe_browsing::DownloadCheckResult::UNKNOWN);
+-      return;
+-    }
+-    item->browser_context = rph->GetBrowserContext();
+-  }
+-
+-  if (!item->web_contents) {
+-    content::RenderFrameHost* rfh = content::RenderFrameHost::FromID(frame_id);
+-    if (rfh)
+-      item->web_contents = content::WebContents::FromRenderFrameHost(rfh);
+-  }
+-
+-  sb_service->download_protection_service()->CheckNativeFileSystemWrite(
+-      std::move(item), std::move(callback));
+-#endif
+-}
+-
+-ChromeNativeFileSystemPermissionContext::AfterWriteCheckResult
+-InterpretSafeBrowsingResult(safe_browsing::DownloadCheckResult result) {
+-  using Result = safe_browsing::DownloadCheckResult;
+-  switch (result) {
+-    // Only allow downloads that are marked as SAFE or UNKNOWN by SafeBrowsing.
+-    // All other types are going to be blocked. UNKNOWN could be the result of a
+-    // failed safe browsing ping.
+-    case Result::UNKNOWN:
+-    case Result::SAFE:
+-    case Result::WHITELISTED_BY_POLICY:
+-      return ChromeNativeFileSystemPermissionContext::AfterWriteCheckResult::
+-          kAllow;
+-
+-    case Result::DANGEROUS:
+-    case Result::UNCOMMON:
+-    case Result::DANGEROUS_HOST:
+-    case Result::POTENTIALLY_UNWANTED:
+-    case Result::BLOCKED_PASSWORD_PROTECTED:
+-    case Result::BLOCKED_TOO_LARGE:
+-    case Result::BLOCKED_UNSUPPORTED_FILE_TYPE:
+-      return ChromeNativeFileSystemPermissionContext::AfterWriteCheckResult::
+-          kBlock;
+-
+-    // This shouldn't be returned for Native File System write checks.
+-    case Result::ASYNC_SCANNING:
+-    case Result::SENSITIVE_CONTENT_WARNING:
+-    case Result::SENSITIVE_CONTENT_BLOCK:
+-    case Result::DEEP_SCANNED_SAFE:
+-    case Result::PROMPT_FOR_SCANNING:
+-      NOTREACHED();
+-      return ChromeNativeFileSystemPermissionContext::AfterWriteCheckResult::
+-          kAllow;
+-  }
+-  NOTREACHED();
+-  return ChromeNativeFileSystemPermissionContext::AfterWriteCheckResult::kBlock;
+-}
+-
+ }  // namespace
+ 
+ ChromeNativeFileSystemPermissionContext::Grants::Grants() = default;
+@@ -324,29 +250,6 @@ void ChromeNativeFileSystemPermissionCon
+                      std::move(callback)));
+ }
+ 
+-void ChromeNativeFileSystemPermissionContext::PerformAfterWriteChecks(
+-    std::unique_ptr<content::NativeFileSystemWriteItem> item,
+-    content::GlobalFrameRoutingId frame_id,
+-
+-    base::OnceCallback<void(AfterWriteCheckResult)> callback) {
+-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+-  content::GetUIThreadTaskRunner({})->PostTask(
+-      FROM_HERE,
+-      base::BindOnce(
+-          &DoSafeBrowsingCheckOnUIThread, frame_id, std::move(item),
+-          base::BindOnce(
+-              [](scoped_refptr<base::TaskRunner> task_runner,
+-                 base::OnceCallback<void(AfterWriteCheckResult result)>
+-                     callback,
+-                 safe_browsing::DownloadCheckResult result) {
+-                task_runner->PostTask(
+-                    FROM_HERE,
+-                    base::BindOnce(std::move(callback),
+-                                   InterpretSafeBrowsingResult(result)));
+-              },
+-              base::SequencedTaskRunnerHandle::Get(), std::move(callback))));
+-}
+-
+ void ChromeNativeFileSystemPermissionContext::
+     DidConfirmSensitiveDirectoryAccess(
+         const url::Origin& origin,
+--- a/chrome/browser/native_file_system/chrome_native_file_system_permission_context.h
++++ b/chrome/browser/native_file_system/chrome_native_file_system_permission_context.h
+@@ -52,10 +52,6 @@ class ChromeNativeFileSystemPermissionCo
+       bool is_directory,
+       content::GlobalFrameRoutingId frame_id,
+       base::OnceCallback<void(SensitiveDirectoryResult)> callback) override;
+-  void PerformAfterWriteChecks(
+-      std::unique_ptr<content::NativeFileSystemWriteItem> item,
+-      content::GlobalFrameRoutingId frame_id,
+-      base::OnceCallback<void(AfterWriteCheckResult)> callback) override;
+   bool CanObtainWritePermission(const url::Origin& origin) override;
+ 
+   ContentSetting GetReadGuardContentSetting(const url::Origin& origin);
+--- a/chrome/browser/password_manager/chrome_password_manager_client.cc
++++ b/chrome/browser/password_manager/chrome_password_manager_client.cc
+@@ -30,7 +30,6 @@
+ #include "chrome/browser/password_manager/password_store_factory.h"
+ #include "chrome/browser/prerender/prerender_contents.h"
+ #include "chrome/browser/profiles/profile.h"
+-#include "chrome/browser/safe_browsing/chrome_password_protection_service.h"
+ #include "chrome/browser/safe_browsing/user_interaction_observer.h"
+ #include "chrome/browser/signin/identity_manager_factory.h"
+ #include "chrome/browser/sync/profile_sync_service_factory.h"
+@@ -101,10 +100,10 @@
+ #if BUILDFLAG(FULL_SAFE_BROWSING)
+ #include "chrome/browser/safe_browsing/advanced_protection_status_manager.h"
+ #include "chrome/browser/safe_browsing/advanced_protection_status_manager_factory.h"
++#endif
+ #include "third_party/blink/public/mojom/clipboard/clipboard.mojom.h"
+ #include "ui/base/clipboard/clipboard.h"
+ #include "ui/events/keycodes/keyboard_codes.h"
+-#endif
+ 
+ #if defined(OS_ANDROID)
+ #include "base/feature_list.h"
+@@ -747,6 +746,7 @@ std::string ChromePasswordManagerClient:
+   return std::string();
+ }
+ 
++#if BUILDFLAG(FULL_SAFE_BROWSING)
+ #if defined(ON_FOCUS_PING_ENABLED) || \
+     defined(SYNC_PASSWORD_REUSE_DETECTION_ENABLED)
+ safe_browsing::PasswordProtectionService*
+@@ -769,6 +769,7 @@ void ChromePasswordManagerClient::CheckS
+   }
+ }
+ #endif  // defined(ON_FOCUS_PING_ENABLED)
++#endif // BUILDFLAG(FULL_SAFE_BROWSING)
+ 
+ #if defined(SYNC_PASSWORD_REUSE_DETECTION_ENABLED)
+ void ChromePasswordManagerClient::CheckProtectedPasswordEntry(
+@@ -777,24 +778,11 @@ void ChromePasswordManagerClient::CheckP
+     const std::vector<password_manager::MatchingReusedCredential>&
+         matching_reused_credentials,
+     bool password_field_exists) {
+-  safe_browsing::PasswordProtectionService* pps =
+-      GetPasswordProtectionService();
+-  if (!pps)
+-    return;
+-
+-  pps->MaybeStartProtectedPasswordEntryRequest(
+-      web_contents(), web_contents()->GetLastCommittedURL(), username,
+-      password_type, matching_reused_credentials, password_field_exists);
+ }
+ #endif  // defined(SYNC_PASSWORD_REUSE_DETECTION_ENABLED)
+ 
+ #if defined(SYNC_PASSWORD_REUSE_WARNING_ENABLED)
+ void ChromePasswordManagerClient::LogPasswordReuseDetectedEvent() {
+-  safe_browsing::PasswordProtectionService* pps =
+-      GetPasswordProtectionService();
+-  if (pps) {
+-    pps->MaybeLogPasswordReuseDetectedEvent(web_contents());
+-  }
+ }
+ #endif  // defined(SYNC_PASSWORD_REUSE_WARNING_ENABLED)
+ 
+@@ -1206,9 +1194,11 @@ void ChromePasswordManagerClient::OnPast
+   base::string16 text;
+   clipboard->ReadText(ui::ClipboardBuffer::kCopyPaste, &text);
+   was_on_paste_called_ = true;
++#if defined(SYNC_PASSWORD_REUSE_DETECTION_ENABLED)
+   password_reuse_detection_manager_.OnPaste(std::move(text));
++#endif  // defined(SYNC_PASSWORD_REUSE_DETECTION_ENABLED)
+ }
+-#endif
++#endif  // !defined(OS_ANDROID)
+ 
+ void ChromePasswordManagerClient::RenderFrameCreated(
+     content::RenderFrameHost* render_frame_host) {
+@@ -1245,7 +1235,9 @@ void ChromePasswordManagerClient::OnInpu
+   if (key_event.windows_key_code == (ui::VKEY_V & 0x1f)) {
+     OnPaste();
+   } else {
++#if defined(SYNC_PASSWORD_REUSE_DETECTION_ENABLED)
+     password_reuse_detection_manager_.OnKeyPressedCommitted(key_event.text);
++#endif  // defined(SYNC_PASSWORD_REUSE_DETECTION_ENABLED)
+   }
+ #endif  // defined(OS_ANDROID)
+ }
+@@ -1284,6 +1276,7 @@ bool ChromePasswordManagerClient::IsPass
+     is_enabled = false;
+   }
+ 
++  #if BUILDFLAG(FULL_SAFE_BROWSING)
+   // SafeBrowsing Delayed Warnings experiment can delay some SafeBrowsing
+   // warnings until user interaction. If the current page has a delayed warning,
+   // it'll have a user interaction observer attached. Disable password
+@@ -1294,6 +1287,7 @@ bool ChromePasswordManagerClient::IsPass
+     observer->OnPasswordSaveOrAutofillDenied();
+     is_enabled = false;
+   }
++  #endif // BUILDFLAG(FULL_SAFE_BROWSING)
+ 
+   if (log_manager_->IsLoggingActive()) {
+     password_manager::BrowserSavePasswordProgressLogger logger(
+--- a/chrome/browser/password_manager/chrome_password_manager_client.h
++++ b/chrome/browser/password_manager/chrome_password_manager_client.h
+@@ -175,13 +175,14 @@ class ChromePasswordManagerClient
+   void AnnotateNavigationEntry(bool has_password_field) override;
+   std::string GetPageLanguage() const override;
+ 
+-#if defined(ON_FOCUS_PING_ENABLED) || \
+-    defined(SYNC_PASSWORD_REUSE_DETECTION_ENABLED)
++#if (defined(ON_FOCUS_PING_ENABLED) || \
++    defined(SYNC_PASSWORD_REUSE_DETECTION_ENABLED)) && \
++    BUILDFLAG(FULL_SAFE_BROWSING)
+   safe_browsing::PasswordProtectionService* GetPasswordProtectionService()
+       const override;
+ #endif
+ 
+-#if defined(ON_FOCUS_PING_ENABLED)
++#if defined(ON_FOCUS_PING_ENABLED) && BUILDFLAG(FULL_SAFE_BROWSING)
+   void CheckSafeBrowsingReputation(const GURL& form_action,
+                                    const GURL& frame_url) override;
+ #endif
+--- a/chrome/browser/permissions/contextual_notification_permission_ui_selector.cc
++++ b/chrome/browser/permissions/contextual_notification_permission_ui_selector.cc
+@@ -19,12 +19,10 @@
+ #include "chrome/browser/permissions/quiet_notification_permission_ui_config.h"
+ #include "chrome/browser/permissions/quiet_notification_permission_ui_state.h"
+ #include "chrome/browser/profiles/profile.h"
+-#include "chrome/browser/safe_browsing/safe_browsing_service.h"
+ #include "chrome/common/chrome_features.h"
+ #include "chrome/common/pref_names.h"
+ #include "components/permissions/permission_request.h"
+ #include "components/prefs/pref_service.h"
+-#include "components/safe_browsing/core/db/database_manager.h"
+ 
+ namespace {
+ 
+@@ -155,9 +153,6 @@ void ContextualNotificationPermissionUiS
+ }
+ 
+ void ContextualNotificationPermissionUiSelector::Cancel() {
+-  // The computation either finishes synchronously above, or is waiting on the
+-  // Safe Browsing check.
+-  safe_browsing_request_.reset();
+ }
+ 
+ ContextualNotificationPermissionUiSelector::
+@@ -168,24 +163,14 @@ void ContextualNotificationPermissionUiS
+   base::Optional<Decision> decision = GetDecisionBasedOnSiteReputation(
+       CrowdDenyPreloadData::GetInstance()->GetReputationDataForSite(origin));
+ 
+-  // If the PreloadData suggests this is an unacceptable site, ping Safe
+-  // Browsing to verify; but do not ping if it is not warranted.
++  // If the PreloadData suggests this is an unacceptable site, assume it is
++  // correct, since we can't access safe browsing.
+   if (!decision || (!decision->quiet_ui_reason && !decision->warning_reason)) {
+     OnPerSiteTriggersEvaluated(Decision::UseNormalUiAndShowNoWarning());
+-    return;
++  } else {
++    // decision has a value, unwrap with .value()
++    OnPerSiteTriggersEvaluated(decision.value());
+   }
+-
+-  DCHECK(!safe_browsing_request_);
+-  DCHECK(g_browser_process->safe_browsing_service());
+-
+-  // It is fine to use base::Unretained() here, as |safe_browsing_request_|
+-  // guarantees not to fire the callback after its destruction.
+-  safe_browsing_request_.emplace(
+-      g_browser_process->safe_browsing_service()->database_manager(),
+-      base::DefaultClock::GetInstance(), origin,
+-      base::BindOnce(&ContextualNotificationPermissionUiSelector::
+-                         OnSafeBrowsingVerdictReceived,
+-                     base::Unretained(this), *decision));
+ }
+ 
+ void ContextualNotificationPermissionUiSelector::OnSafeBrowsingVerdictReceived(
+--- a/chrome/browser/reputation/safety_tips_config.cc
++++ b/chrome/browser/reputation/safety_tips_config.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/reputation/safety_tips_config.h"
+ 
+ #include "base/no_destructor.h"
++#include "base/notreached.h"
+ #include "components/safe_browsing/core/db/v4_protocol_manager_util.h"
+ #include "third_party/re2/src/re2/re2.h"
+ #include "url/gurl.h"
+--- a/chrome/browser/ui/javascript_dialogs/javascript_tab_modal_dialog_manager_delegate_desktop.cc
++++ b/chrome/browser/ui/javascript_dialogs/javascript_tab_modal_dialog_manager_delegate_desktop.cc
+@@ -36,6 +36,7 @@ JavaScriptTabModalDialogManagerDelegateD
+ 
+ void JavaScriptTabModalDialogManagerDelegateDesktop::WillRunDialog() {
+   BrowserList::AddObserver(this);
++  #if BUILDFLAG(FULL_SAFE_BROWSING)
+   // SafeBrowsing Delayed Warnings experiment can delay some SafeBrowsing
+   // warnings until user interaction. If the current page has a delayed warning,
+   // it'll have a user interaction observer attached. Show the warning
+@@ -46,6 +47,7 @@ void JavaScriptTabModalDialogManagerDele
+   if (observer) {
+     observer->OnJavaScriptDialog();
+   }
++  #endif // BUILDFLAG(FULL_SAFE_BROWSING)
+ }
+ 
+ void JavaScriptTabModalDialogManagerDelegateDesktop::DidCloseDialog() {
+--- a/chrome/browser/ui/tab_contents/chrome_web_contents_view_handle_drop.cc
++++ b/chrome/browser/ui/tab_contents/chrome_web_contents_view_handle_drop.cc
+@@ -79,37 +79,8 @@ void HandleOnPerformDrop(
+     content::WebContents* web_contents,
+     const content::DropData& drop_data,
+     content::WebContentsViewDelegate::DropCompletionCallback callback) {
+-  safe_browsing::DeepScanningDialogDelegate::Data data;
+-  Profile* profile =
+-      Profile::FromBrowserContext(web_contents->GetBrowserContext());
+-  auto connector =
+-      drop_data.filenames.empty()
+-          ? enterprise_connectors::AnalysisConnector::BULK_DATA_ENTRY
+-          : enterprise_connectors::AnalysisConnector::FILE_ATTACHED;
+-  if (!safe_browsing::DeepScanningDialogDelegate::IsEnabled(
+-          profile, web_contents->GetLastCommittedURL(), &data, connector)) {
+-    std::move(callback).Run(
+-        content::WebContentsViewDelegate::DropCompletionResult::kContinue);
+-    return;
+-  }
+-
+-  // Collect the data that needs to be scanned.
+-  if (!drop_data.url_title.empty())
+-    data.text.push_back(drop_data.url_title);
+-  if (drop_data.text)
+-    data.text.push_back(*drop_data.text);
+-  if (drop_data.html)
+-    data.text.push_back(*drop_data.html);
+-  if (!drop_data.file_contents.empty())
+-    data.text.push_back(base::UTF8ToUTF16(drop_data.file_contents));
+-
+-  if (drop_data.filenames.empty()) {
+-    ScanData(web_contents, std::move(callback), std::move(data));
+-  } else {
+-    base::ThreadPool::PostTaskAndReplyWithResult(
+-        FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
+-        base::BindOnce(&GetPathsToScan, web_contents, std::move(drop_data),
+-                       std::move(data)),
+-        base::BindOnce(&ScanData, web_contents, std::move(callback)));
+-  }
++  // In the original code, this ran safe_browsing::DeepScanningDialogDelegate
++  // Instead, run the code under "if (!safe_browsing::DeepScanningDialogDelegate::IsEnabled(...)) ..."
++  std::move(callback).Run(
++      content::WebContentsViewDelegate::DropCompletionResult::kContinue);
+ }
+--- a/chrome/browser/ui/views/download/download_item_view.cc
++++ b/chrome/browser/ui/views/download/download_item_view.cc
+@@ -1203,9 +1203,7 @@ void DownloadItemView::ShowDeepScanningD
+   DCHECK_EQ(mode_, Mode::kNormal);
+   SetMode(Mode::kDeepScanning);
+ 
+-  const int id = (model_->download() &&
+-                  safe_browsing::DeepScanningRequest::ShouldUploadBinary(
+-                      model_->download()))
++  const int id = model_->download()
+                      ? IDS_PROMPT_DEEP_SCANNING_DOWNLOAD
+                      : IDS_PROMPT_DEEP_SCANNING_APP_DOWNLOAD;
+   const base::string16 filename = ElidedFilename();
+@@ -1221,16 +1219,20 @@ void DownloadItemView::ShowDeepScanningD
+   StyleFilename(*deep_scanning_label_, filename_offset, filename.length());
+   deep_scanning_label_->SizeToFit(GetLabelWidth(*deep_scanning_label_));
+ 
++#if BUILDFLAG(FULL_SAFE_BROWSING)
+   if (enterprise_connectors::ConnectorsManager::GetInstance()
+           ->DelayUntilVerdict(
+               enterprise_connectors::AnalysisConnector::FILE_DOWNLOADED)) {
+     open_button_->SetEnabled(false);
+   } else {
++#endif  // BUILDFLAG(FULL_SAFE_BROWSING)
+     auto open_now_button = views::MdTextButton::Create(
+         this, l10n_util::GetStringUTF16(IDS_OPEN_DOWNLOAD_NOW));
+     open_now_button_ = AddChildView(std::move(open_now_button));
+     open_button_->SetEnabled(true);
++#if BUILDFLAG(FULL_SAFE_BROWSING)
+   }
++#endif  // BUILDFLAG(FULL_SAFE_BROWSING)
+ 
+   file_name_label_->SetVisible(false);
+   status_label_->SetVisible(false);
+@@ -1553,7 +1555,9 @@ base::string16 DownloadItemView::ElidedF
+ }
+ 
+ void DownloadItemView::OpenDownloadDuringAsyncScanning() {
++#if BUILDFLAG(FULL_SAFE_BROWSING)
+   model_->CompleteSafeBrowsingScan();
++#endif
+   model_->SetOpenWhenComplete(true);
+ }
+ 
+--- a/chrome/browser/ui/views/safe_browsing/password_reuse_modal_warning_dialog.cc
++++ b/chrome/browser/ui/views/safe_browsing/password_reuse_modal_warning_dialog.cc
+@@ -178,10 +178,7 @@ PasswordReuseModalWarningDialog::Passwor
+         placeholder_offsets);
+   } else {
+     views::Label* message_body_label = CreateMessageBodyLabel(
+-        service_
+-            ? service_->GetWarningDetailText(password_type,
+-                                             &placeholder_offsets)
+-            : l10n_util::GetStringUTF16(IDS_PAGE_INFO_CHANGE_PASSWORD_DETAILS));
++        l10n_util::GetStringUTF16(IDS_PAGE_INFO_CHANGE_PASSWORD_DETAILS));
+     CreateGaiaPasswordReuseModalWarningDialog(message_body_label);
+   }
+   modal_construction_start_time_ = base::TimeTicks::Now();
+--- a/chrome/browser/ui/webui/chrome_web_ui_controller_factory.cc
++++ b/chrome/browser/ui/webui/chrome_web_ui_controller_factory.cc
+@@ -87,8 +87,6 @@
+ #include "components/nacl/common/buildflags.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/safe_browsing/buildflags.h"
+-#include "components/safe_browsing/content/web_ui/safe_browsing_ui.h"
+-#include "components/safe_browsing/core/web_ui/constants.h"
+ #include "components/security_interstitials/content/connection_help_ui.h"
+ #include "components/security_interstitials/content/known_interception_disclosure_ui.h"
+ #include "components/security_interstitials/content/urls.h"
+@@ -478,8 +476,6 @@ WebUIFactoryFunction GetWebUIFactoryFunc
+     return &NewWebUI<PredictorsUI>;
+   if (url.host_piece() == chrome::kChromeUIQuotaInternalsHost)
+     return &NewWebUI<QuotaInternalsUI>;
+-  if (url.host_piece() == safe_browsing::kChromeUISafeBrowsingHost)
+-    return &NewWebUI<safe_browsing::SafeBrowsingUI>;
+   if (url.host_piece() == chrome::kChromeUISignInInternalsHost)
+     return &NewWebUI<SignInInternalsUI>;
+   if (url.host_piece() == chrome::kChromeUISuggestionsHost)
+--- a/chrome/browser/ui/webui/downloads/downloads_dom_handler.cc
++++ b/chrome/browser/ui/webui/downloads/downloads_dom_handler.cc
+@@ -358,7 +358,6 @@ void DownloadsDOMHandler::OpenDuringScan
+   if (download) {
+     DownloadItemModel model(download);
+     model.SetOpenWhenComplete(true);
+-    model.CompleteSafeBrowsingScan();
+   }
+ }
+ 
+--- a/components/password_manager/content/browser/content_password_manager_driver.cc
++++ b/components/password_manager/content/browser/content_password_manager_driver.cc
+@@ -319,7 +319,7 @@ void ContentPasswordManagerDriver::Check
+   if (client_->GetMetricsRecorder()) {
+     client_->GetMetricsRecorder()->RecordUserFocusedPasswordField();
+   }
+-#if defined(ON_FOCUS_PING_ENABLED)
++#if defined(ON_FOCUS_PING_ENABLED) && BUILDFLAG(FULL_SAFE_BROWSING)
+   client_->CheckSafeBrowsingReputation(form_action, frame_url);
+ #endif
+ }
+--- a/components/password_manager/core/browser/password_manager_client.h
++++ b/components/password_manager/core/browser/password_manager_client.h
+@@ -327,14 +327,15 @@ class PasswordManagerClient {
+   // Returns the current best guess as to the page's display language.
+   virtual std::string GetPageLanguage() const;
+ 
+-#if defined(ON_FOCUS_PING_ENABLED) || \
+-    defined(SYNC_PASSWORD_REUSE_DETECTION_ENABLED)
++#if (defined(ON_FOCUS_PING_ENABLED) || \
++    defined(SYNC_PASSWORD_REUSE_DETECTION_ENABLED)) && \
++    BUILDFLAG(FULL_SAFE_BROWSING)
+   // Return the PasswordProtectionService associated with this instance.
+   virtual safe_browsing::PasswordProtectionService*
+   GetPasswordProtectionService() const = 0;
+ #endif
+ 
+-#if defined(ON_FOCUS_PING_ENABLED)
++#if defined(ON_FOCUS_PING_ENABLED) && BUILDFLAG(FULL_SAFE_BROWSING)
+   // Checks the safe browsing reputation of the webpage when the
+   // user focuses on a username/password field. This is used for reporting
+   // only, and won't trigger a warning.
+--- a/components/safe_browsing/content/common/safe_browsing.mojom
++++ b/components/safe_browsing/content/common/safe_browsing.mojom
+@@ -117,7 +117,6 @@ enum PhishingDetectorResult {
+   INVALID_SCORE = 4,
+ };
+ 
+-[EnableIf=full_safe_browsing]
+ // Interface for setting the CSD model and to start phishing classification.
+ interface PhishingDetector {
+   // A classification model for client-side phishing detection.
+--- a/components/safe_browsing/core/file_type_policies.h
++++ b/components/safe_browsing/core/file_type_policies.h
+@@ -11,7 +11,6 @@
+ #include "base/files/file_path.h"
+ #include "base/gtest_prod_util.h"
+ #include "base/synchronization/lock.h"
+-#include "components/safe_browsing/core/proto/download_file_types.pb.h"
+ 
+ namespace safe_browsing {
+ 
+@@ -64,20 +63,8 @@ class FileTypePolicies {
+   // True if the user can select this file type to be opened automatically.
+   bool IsAllowedToOpenAutomatically(const base::FilePath& file) const;
+ 
+-  // Return the danger level of this file type.
+-  DownloadFileType::DangerLevel GetFileDangerLevel(
+-      const base::FilePath& file) const;
+-
+-  // Return the type of ping we should send for this file
+-  DownloadFileType::PingSetting PingSettingForFile(
+-      const base::FilePath& file) const;
+-
+   float SampledPingProbability() const;
+ 
+-  DownloadFileType PolicyForFile(const base::FilePath& file) const;
+-  DownloadFileType::PlatformSettings SettingsForFile(
+-      const base::FilePath& file) const;
+-
+   // Return max size for which unpacking and/or binary feature extration is
+   // supported for the given file extension.
+   uint64_t GetMaxFileSizeToAnalyze(const std::string& ascii_ext) const;
+@@ -115,32 +102,12 @@ class FileTypePolicies {
+   // Return the ASCII lowercase extension w/o leading dot, or empty.
+   static std::string CanonicalizedExtension(const base::FilePath& file);
+ 
+-  // Look up the policy for a given ASCII ext.
+-  virtual const DownloadFileType& PolicyForExtension(
+-      const std::string& ext) const;
+-
+  private:
+-  // Swap in a different config. This will rebuild file_type_by_ext_ index.
+-  void SwapConfig(std::unique_ptr<DownloadFileTypeConfig>& new_config);
+-  void SwapConfigLocked(std::unique_ptr<DownloadFileTypeConfig>& new_config);
+-
+   // Read data from the main ResourceBundle. This updates the internal list
+   // only if the data passes integrity checks. This is normally called once
+   // after construction.
+   void PopulateFromResourceBundle();
+ 
+-  // The latest config we've committed. Starts out null.
+-  // Protected by lock_.
+-  std::unique_ptr<DownloadFileTypeConfig> config_;
+-
+-  // This references entries in config_.
+-  // Protected by lock_.
+-  std::map<std::string, const DownloadFileType*> file_type_by_ext_;
+-
+-  // Type used if we can't load from disk.
+-  // Written only in the constructor.
+-  DownloadFileType last_resort_default_;
+-
+   mutable base::Lock lock_;
+ 
+   FRIEND_TEST_ALL_PREFIXES(FileTypePoliciesTest, UnpackResourceBundle);
+--- a/content/browser/native_file_system/native_file_system_file_writer_impl.cc
++++ b/content/browser/native_file_system/native_file_system_file_writer_impl.cc
+@@ -94,8 +94,7 @@ NativeFileSystemFileWriterImpl::NativeFi
+                                  url,
+                                  handle_state,
+                                  /*is_directory=*/false),
+-      swap_url_(swap_url),
+-      has_transient_user_activation_(has_transient_user_activation) {
++      swap_url_(swap_url) {
+   DCHECK_EQ(swap_url.type(), url.type());
+ }
+ 
+@@ -303,49 +302,7 @@ void NativeFileSystemFileWriterImpl::Clo
+   // swap file even if the writer was destroyed at that point.
+   state_ = State::kClosePending;
+ 
+-  if (!RequireAfterWriteCheck() || !manager()->permission_context()) {
+-    DidPassAfterWriteCheck(std::move(callback));
+-    return;
+-  }
+-
+-  ComputeHashForSwapFile(base::BindOnce(
+-      &NativeFileSystemFileWriterImpl::DoAfterWriteCheck,
+-      weak_factory_.GetWeakPtr(), swap_url().path(), std::move(callback)));
+-}
+-
+-// static
+-void NativeFileSystemFileWriterImpl::DoAfterWriteCheck(
+-    base::WeakPtr<NativeFileSystemFileWriterImpl> file_writer,
+-    const base::FilePath& swap_path,
+-    NativeFileSystemFileWriterImpl::CloseCallback callback,
+-    base::File::Error hash_result,
+-    const std::string& hash,
+-    int64_t size) {
+-  if (!file_writer || hash_result != base::File::FILE_OK) {
+-    // If writer was deleted, or calculating the hash failed try deleting the
+-    // swap file and invoke the callback.
+-    base::ThreadPool::PostTask(
+-        FROM_HERE, {base::MayBlock()},
+-        base::BindOnce(base::GetDeleteFileCallback(), swap_path));
+-    std::move(callback).Run(native_file_system_error::FromStatus(
+-        NativeFileSystemStatus::kOperationAborted,
+-        "Failed to perform Safe Browsing check."));
+-    return;
+-  }
+-
+-  DCHECK_CALLED_ON_VALID_SEQUENCE(file_writer->sequence_checker_);
+-
+-  auto item = std::make_unique<NativeFileSystemWriteItem>();
+-  item->target_file_path = file_writer->url().path();
+-  item->full_path = file_writer->swap_url().path();
+-  item->sha256_hash = hash;
+-  item->size = size;
+-  item->frame_url = file_writer->context().url;
+-  item->has_user_gesture = file_writer->has_transient_user_activation_;
+-  file_writer->manager()->permission_context()->PerformAfterWriteChecks(
+-      std::move(item), file_writer->context().frame_id,
+-      base::BindOnce(&NativeFileSystemFileWriterImpl::DidAfterWriteCheck,
+-                     file_writer, swap_path, std::move(callback)));
++  DidPassAfterWriteCheck(std::move(callback));
+ }
+ 
+ // static
+--- a/content/browser/native_file_system/native_file_system_file_writer_impl.h
++++ b/content/browser/native_file_system/native_file_system_file_writer_impl.h
+@@ -80,15 +80,8 @@ class CONTENT_EXPORT NativeFileSystemFil
+                 bool complete);
+   void TruncateImpl(uint64_t length, TruncateCallback callback);
+   void CloseImpl(CloseCallback callback);
+-  // The following two methods are static, because they need to be invoked to
++  // The following method is static because they need to be invoked to
+   // perform cleanup even if the writer was deleted before they were invoked.
+-  static void DoAfterWriteCheck(
+-      base::WeakPtr<NativeFileSystemFileWriterImpl> file_writer,
+-      const base::FilePath& swap_path,
+-      NativeFileSystemFileWriterImpl::CloseCallback callback,
+-      base::File::Error hash_result,
+-      const std::string& hash,
+-      int64_t size);
+   static void DidAfterWriteCheck(
+       base::WeakPtr<NativeFileSystemFileWriterImpl> file_writer,
+       const base::FilePath& swap_path,
+@@ -102,9 +95,7 @@ class CONTENT_EXPORT NativeFileSystemFil
+   // After write checks apply to native local paths, file system provider paths,
+   // and platform app native paths.
+   bool RequireAfterWriteCheck() const {
+-    return url().type() == storage::kFileSystemTypeNativeLocal ||
+-           url().type() == storage::kFileSystemTypeProvided ||
+-           url().type() == storage::kFileSystemTypeNativeForPlatformApp;
++    return false;
+   }
+ 
+   // Quarantine checks apply to native local paths, file system provider paths,
+@@ -149,10 +140,6 @@ class CONTENT_EXPORT NativeFileSystemFil
+ 
+   bool skip_quarantine_check_for_testing_ = false;
+ 
+-  // Keeps track of user activation state at creation time for after write
+-  // checks.
+-  bool has_transient_user_activation_ = false;
+-
+   base::WeakPtr<NativeFileSystemHandleBase> AsWeakPtr() override;
+ 
+   base::WeakPtrFactory<NativeFileSystemFileWriterImpl> weak_factory_{this};
+--- a/content/public/browser/native_file_system_permission_context.h
++++ b/content/public/browser/native_file_system_permission_context.h
+@@ -85,12 +85,6 @@ class NativeFileSystemPermissionContext
+       base::OnceCallback<void(SensitiveDirectoryResult)> callback) = 0;
+ 
+   enum class AfterWriteCheckResult { kAllow, kBlock };
+-  // Runs a recently finished write operation through checks such as malware
+-  // or other security checks to determine if the write should be allowed.
+-  virtual void PerformAfterWriteChecks(
+-      std::unique_ptr<NativeFileSystemWriteItem> item,
+-      GlobalFrameRoutingId frame_id,
+-      base::OnceCallback<void(AfterWriteCheckResult)> callback) = 0;
+ 
+   // Returns whether the give |origin| already allows write permission, or it is
+   // possible to request one. This is used to block save file dialogs from being

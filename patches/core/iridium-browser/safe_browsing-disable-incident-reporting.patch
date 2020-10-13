@@ -1,0 +1,75 @@
+From fe92c640c7e02841dcf5dbc20a5eddbd07fd7edf Mon Sep 17 00:00:00 2001
+From: Joachim Bauch <jojo@struktur.de>
+Date: Tue, 7 Jul 2015 17:02:09 +0200
+Subject: [PATCH 47/66] safe_browsing: disable incident reporting
+
+Disables the safebrowsing incident reporting where you could upload
+information about a blocked URL to Google (also added a trk prefix to
+the URL so we get notified if this happens again in the future).
+---
+ .../safe_browsing/incident_reporting/incident_report_uploader_impl.cc  | 2 +-
+ .../safe_browsing/incident_reporting/incident_reporting_service.cc     | 3 +++
+ chrome/browser/safe_browsing/safe_browsing_blocking_page.cc            | 3 +--
+ chrome/browser/safe_browsing/safe_browsing_service.cc                  | 2 ++
+ components/security_interstitials/core/safe_browsing_loud_error_ui.cc  | 2 ++
+ 5 files changed, 9 insertions(+), 3 deletions(-)
+
+--- a/chrome/browser/safe_browsing/incident_reporting/incident_report_uploader_impl.cc
++++ b/chrome/browser/safe_browsing/incident_reporting/incident_report_uploader_impl.cc
+@@ -22,7 +22,7 @@ namespace safe_browsing {
+ namespace {
+ 
+ const char kSbIncidentReportUrl[] =
+-    "https://sb-ssl.google.com/safebrowsing/clientreport/incident";
++    "trk:268:https://sb-ssl.google.com/safebrowsing/clientreport/incident";
+ 
+ constexpr net::NetworkTrafficAnnotationTag
+     kSafeBrowsingIncidentTrafficAnnotation =
+--- a/chrome/browser/safe_browsing/incident_reporting/incident_reporting_service.cc
++++ b/chrome/browser/safe_browsing/incident_reporting/incident_reporting_service.cc
+@@ -302,11 +302,7 @@ IncidentReportingService::UploadContext:
+ 
+ // static
+ bool IncidentReportingService::IsEnabledForProfile(Profile* profile) {
+-  if (profile->IsOffTheRecord())
+-    return false;
+-  if (!IsSafeBrowsingEnabled(*profile->GetPrefs()))
+-    return false;
+-  return IsExtendedReportingEnabled(*profile->GetPrefs());
++  return false;
+ }
+ 
+ IncidentReportingService::IncidentReportingService(
+--- a/chrome/browser/safe_browsing/safe_browsing_blocking_page.cc
++++ b/chrome/browser/safe_browsing/safe_browsing_blocking_page.cc
+@@ -63,8 +63,7 @@ class SafeBrowsingBlockingPageFactoryImp
+     PrefService* prefs =
+         Profile::FromBrowserContext(web_contents->GetBrowserContext())
+             ->GetPrefs();
+-    bool is_extended_reporting_opt_in_allowed =
+-        IsExtendedReportingOptInAllowed(*prefs);
++    bool is_extended_reporting_opt_in_allowed = false;
+     bool is_proceed_anyway_disabled =
+         prefs->GetBoolean(prefs::kSafeBrowsingProceedAnywayDisabled);
+ 
+--- a/chrome/browser/safe_browsing/safe_browsing_service.cc
++++ b/chrome/browser/safe_browsing/safe_browsing_service.cc
+@@ -247,7 +247,7 @@ SafeBrowsingUIManager* SafeBrowsingServi
+ }
+ 
+ void SafeBrowsingService::RegisterAllDelayedAnalysis() {
+-#if BUILDFLAG(FULL_SAFE_BROWSING)
++#if 0
+   RegisterBinaryIntegrityAnalysis();
+ #endif
+ }
+--- a/components/security_interstitials/core/safe_browsing_loud_error_ui.cc
++++ b/components/security_interstitials/core/safe_browsing_loud_error_ui.cc
+@@ -22,6 +22,7 @@ namespace {
+ 
+ // For malware interstitial pages, we link the problematic URL to Google's
+ // diagnostic page.
++// trk:228
+ const char kSbDiagnosticUrl[] =
+     "https://transparencyreport.google.com/safe-browsing/search?url=%s";
+ 

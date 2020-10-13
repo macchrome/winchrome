@@ -1,0 +1,32 @@
+--- a/chrome/browser/ui/views/tabs/new_tab_button.cc
++++ b/chrome/browser/ui/views/tabs/new_tab_button.cc
+@@ -84,10 +84,8 @@ class NewTabButton::HighlightPathGenerat
+ NewTabButton::NewTabButton(TabStrip* tab_strip, views::ButtonListener* listener)
+     : views::ImageButton(listener), tab_strip_(tab_strip) {
+   set_animate_on_state_change(true);
+-#if defined(OS_LINUX) && !defined(OS_CHROMEOS)
+   set_triggerable_event_flags(triggerable_event_flags() |
+                               ui::EF_MIDDLE_MOUSE_BUTTON);
+-#endif
+ 
+   ink_drop_container_ =
+       AddChildView(std::make_unique<views::InkDropContainerView>());
+--- a/chrome/browser/ui/views/tabs/tab_strip.cc
++++ b/chrome/browser/ui/views/tabs/tab_strip.cc
+@@ -3515,15 +3515,12 @@ void TabStrip::ButtonPressed(views::Butt
+ 
+       const ui::MouseEvent& mouse = static_cast<const ui::MouseEvent&>(event);
+       if (mouse.IsOnlyMiddleMouseButton()) {
+-        if (ui::Clipboard::IsSupportedClipboardBuffer(
+-                ui::ClipboardBuffer::kSelection)) {
+           ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
+           CHECK(clipboard);
+           base::string16 clipboard_text;
+           clipboard->ReadText(ui::ClipboardBuffer::kSelection,
+                              /* data_dst = */ nullptr, &clipboard_text);
+           if (!clipboard_text.empty())
+             controller_->CreateNewTabWithLocation(clipboard_text);
+-        }
+         return;
+       }
+     }
